@@ -30,25 +30,24 @@ public class TimeSliceGenerator {
 	 * @param newRawList
 	 * @return
 	 */
-	public static TimeSlice generateTimeSlice(List<String> newRawList, SymbolTable mTokenIndexMap) {
-		for (String raw : newRawList) {
-			String[] splits = raw.split(NLPContants.TAB);
-			String id = splits[0];
-			String title = splits[1];
-			String content = splits[2];
-			if (0 == currentNum) {
-				timeSlice = new TimeSlice(id);
-			}
-			if (currentNum < NLPContants.SLICE_MAX) {
-				Document doc = new Document(id, title + "," + content, timeSlice.getTokenIndexInSlice(),
-						TokenzierUtils.getStopTokenizerFactory());
-				timeSlice.getDocumentList().add(doc);
-				currentNum++;
-			} else {
-				currentNum = 0;
-				return timeSlice;
-			}
+	public static TimeSlice generateTimeSlice(String newsRaw, SymbolTable mTokenIndexMap) {
+		String[] splits = newsRaw.split(NLPContants.TAB);
+		String id = splits[0];
+		String title = splits[1];
+		String content = splits[2];
+		if (0 == currentNum) {
+			timeSlice = new TimeSlice(id);
 		}
+		if (currentNum < NLPContants.SLICE_MAX) {
+			Document doc = new Document(id, title + "," + content, timeSlice.getTokenIndexInSlice(),
+					TokenzierUtils.getStopTokenizerFactory());
+			timeSlice.getDocumentList().add(doc);
+			currentNum++;
+		} else {
+			currentNum = 0;
+			return timeSlice;
+		}
+
 		return null;
 	}
 
@@ -68,17 +67,17 @@ public class TimeSliceGenerator {
 	 * 
 	 * @throws Exception
 	 */
-	public static List<Map<Integer,Double>> generateTopicWordProbInTimeSlice(GibbsSample sample, TimeSlice timeSlice) {
+	public static List<Map<Integer, Double>> generateTopicWordProbInTimeSlice(GibbsSample sample, TimeSlice timeSlice) {
 		int topicNum = sample.numTopics();
 		SymbolTable sliceSymble = timeSlice.getTokenIndexInSlice();
-		List<Map<Integer,Double>> allTopicWordProbs = new ArrayList<Map<Integer,Double>>();
+		List<Map<Integer, Double>> allTopicWordProbs = new ArrayList<Map<Integer, Double>>();
 		int sliceWordCount = sliceSymble.numSymbols();
 		for (int topic = 0; topic < topicNum; topic++) {
-			Map<Integer,Double> topicWordProbs = new HashMap<Integer,Double>();
+			Map<Integer, Double> topicWordProbs = new HashMap<Integer, Double>();
 			for (int wordIndex = 0; wordIndex < sliceWordCount; wordIndex++) {
-				double prob = sample.topicWordProb(topic, wordIndex);//获得topic下词的概率
-				String word = sliceSymble.idToSymbol(wordIndex);//根据时间片的临时索引获得在时间片中词
-				int globalWordIndex = NLPContants.GLOBAL_WORD_INDEX.symbolToID(word);//获得全局索引
+				double prob = sample.topicWordProb(topic, wordIndex);// 获得topic下词的概率
+				String word = sliceSymble.idToSymbol(wordIndex);// 根据时间片的临时索引获得在时间片中词
+				int globalWordIndex = NLPContants.GLOBAL_WORD_INDEX.symbolToID(word);// 获得全局索引
 				if (-1 == globalWordIndex) {
 					System.err.println(String.format("globalword can not find %s", word));
 					prob = 0;

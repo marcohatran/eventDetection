@@ -1,5 +1,6 @@
 package onlineEventdetect.bean;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -50,6 +51,7 @@ public class TimeSlice {
 	public TimeSlice(String sliceId) {
 		mSliceId = sliceId;
 		tokenIndexInSlice = new MapSymbolTable();
+		documentList = new ArrayList<Document>();
 	}
 
 }

@@ -8,7 +8,7 @@ public class NLPContants {
 	public final static String BASE_DIR = LoadConf.getIstance().getProperty(NLPContants.ROOTPATH);
 	
 	
-	public final static Integer SLICE_MAX = 1000;
+	public final static Integer SLICE_MAX = 100;
 	public static final String TAB = "\t";
 	
 	/*全局词索引*/

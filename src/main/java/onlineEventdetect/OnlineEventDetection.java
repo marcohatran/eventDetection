@@ -7,26 +7,31 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Random;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
 
-import com.aliasi.matrix.DenseVector;
 import com.aliasi.symbol.SymbolTable;
 import com.aliasi.util.ObjectToDoubleMap;
 
 import onlineEventdetect.bean.Document;
 import onlineEventdetect.bean.TimeSlice;
+import util.LdaReportingHandler;
 import util.NLPContants;
+import util.NewsProducers;
 
-public class OnlineEventDetection extends Thread{
-	private short topicNum;
+public class OnlineEventDetection extends Thread {
+	private int topicNum;
 	private LinkedList<TimeSlice> timeSliceQueue;
 	private LinkedList<double[]> distanceMatrix;
 	private SymbolTable mTokenIndexMap;// total token index
+	private BlockingQueue<String> cacheQueue;// 新闻内存缓冲区
 
-	public OnlineEventDetection(int cacheStreamNum, short numTopics) {
+	public OnlineEventDetection(int i, BlockingQueue<String> queue) {
 		super();
-		topicNum = numTopics;
+		topicNum = i;
 		timeSliceQueue = new LinkedList<TimeSlice>();
 		distanceMatrix = new LinkedList<double[]>();
+		this.cacheQueue = queue;
 	}
 
 	public int[][] transform(TimeSlice slice) {
@@ -42,86 +47,93 @@ public class OnlineEventDetection extends Thread{
 
 	@Override
 	public void run() {
-		while (true) {
-			List<String> newRawList = receiver();
-			if (null == newRawList) {
-				continue;
-			}
-			TimeSlice generateSlice = TimeSliceGenerator.generateTimeSlice(newRawList, mTokenIndexMap);
-			if (null == generateSlice) {
-				continue;
-			}
-			SymbolTable tokenSliceIndex = generateSlice.getTokenIndexInSlice();// 获得该时间片的词的索引
-			if (timeSliceQueue.size() == 0) {
-				// 首次运行
-				int[][] docWords = TimeSliceGenerator.transformDocuments(generateSlice);
-				int wordNum = tokenSliceIndex.numSymbols();
-				double[][] topicWordPriors = new double[topicNum][wordNum];
-				for (int topic = 0; topic < topicNum; topic++) {
-					for (int tok = 0; tok < wordNum; tok++) {
-						topicWordPriors[topic][tok] = 0.1;
+		LdaReportingHandler handler = new LdaReportingHandler();
+		while (true) { 
+			String getNewsString = null;
+			try {
+				getNewsString = cacheQueue.take();
+				if (null == getNewsString) {
+					continue;
+				}
+				TimeSlice generateSlice = TimeSliceGenerator.generateTimeSlice(getNewsString, mTokenIndexMap);
+				if (null == generateSlice) {
+					continue;
+				}
+				SymbolTable tokenSliceIndex = generateSlice.getTokenIndexInSlice();// 获得该时间片的词的索引
+				if (timeSliceQueue.size() == 0) {
+					// 首次运行
+					int[][] docWords = TimeSliceGenerator.transformDocuments(generateSlice);
+					int wordNum = tokenSliceIndex.numSymbols();
+					double[][] topicWordPriors = new double[topicNum][wordNum];
+					for (int topic = 0; topic < topicNum; topic++) {
+						for (int tok = 0; tok < wordNum; tok++) {
+							topicWordPriors[topic][tok] = 0.1;
+						}
+					}
+					OnlineLatentDirichletAllocation.GibbsSample gibbsSample = OnlineLatentDirichletAllocation
+							.gibbsSampler(docWords, (short)topicNum, 0.1, topicWordPriors, 0, 1, 1000, new Random(1l), handler);
+					TimeSliceGenerator.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
+					timeSliceQueue.offer(generateSlice);
+
+				} else if (timeSliceQueue.size() < NLPContants.QUEUE_MAX) {
+
+					int[][] docWords = TimeSliceGenerator.transformDocuments(generateSlice);
+					int wordNum = tokenSliceIndex.numSymbols();
+					double[][] topicWordPriors = new double[topicNum][wordNum];
+					for (int topic = 0; topic < topicNum; topic++) {
+						for (int tok = 0; tok < wordNum; tok++) {
+							topicWordPriors[topic][tok] = 0.1;
+						}
+					}
+
+					// LDA的Gibbs采样
+					OnlineLatentDirichletAllocation.GibbsSample gibbsSample = OnlineLatentDirichletAllocation
+							.gibbsSampler(docWords, (short)topicNum, 0.1, topicWordPriors, 0, 1, 1000, new Random(1l), handler);
+
+					List<Map<Integer, Double>> allTopicWordProbs = TimeSliceGenerator
+							.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
+					generateSlice.setTopicWordProb(allTopicWordProbs);
+					// 计算该时间片与上一时间片的对称kl散度距离
+					double[] distance = calDistanceBetweenTopics(timeSliceQueue.getLast(), generateSlice);
+					distanceMatrix.offer(distance);
+					timeSliceQueue.offer(generateSlice);
+					int hotTopicId = getTopicIndexByPercByLocal(distance);
+					if (hotTopicId != -1) {
+						System.out.println(hotTopicId);
+					}
+
+				} else if (timeSliceQueue.size() > NLPContants.QUEUE_MAX) {
+
+					// 根据线性时间片的衰减权值计算主题词的先验参数
+					double[][] topicWordPriors = calTopicWordPriors(timeSliceQueue, generateSlice);
+
+					// 江Document文档对象转化成LDA可训练的输入模式，词的索引为该时间片的局部索引
+					int[][] docWords = TimeSliceGenerator.transformDocuments(generateSlice);
+
+					// LDA的Gibbs采样
+					OnlineLatentDirichletAllocation.GibbsSample gibbsSample = OnlineLatentDirichletAllocation
+							.gibbsSampler(docWords, (short)topicNum, 0.1, topicWordPriors, 0, 1, 1000, new Random(1l), handler);
+
+					// 计算改时间片在全局映射下的各个主题的词分布
+					List<Map<Integer, Double>> allTopicWordProbs = TimeSliceGenerator
+							.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
+					generateSlice.setTopicWordProb(allTopicWordProbs);
+
+					// 计算该时间片与上一时间片的对称kl散度距离
+					double[] distance = calDistanceBetweenTopics(timeSliceQueue.getLast(), generateSlice);
+					distanceMatrix.offer(distance);
+					timeSliceQueue.offer(generateSlice);
+					distanceMatrix.poll();
+					timeSliceQueue.poll();
+
+					int hotTopicId = getTopicIndexByPercByLocal(distance);
+					if (hotTopicId != -1) {
+						System.out.println(hotTopicId);
 					}
 				}
-				OnlineLatentDirichletAllocation.GibbsSample gibbsSample = OnlineLatentDirichletAllocation
-						.gibbsSampler(docWords, topicNum, 0.1, topicWordPriors, 1000, 0, 0, new Random(1l), null);
-				TimeSliceGenerator.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
-				timeSliceQueue.offer(generateSlice);
-
-			} else if (timeSliceQueue.size() < NLPContants.QUEUE_MAX) {
-
-				int[][] docWords = TimeSliceGenerator.transformDocuments(generateSlice);
-				int wordNum = tokenSliceIndex.numSymbols();
-				double[][] topicWordPriors = new double[topicNum][wordNum];
-				for (int topic = 0; topic < topicNum; topic++) {
-					for (int tok = 0; tok < wordNum; tok++) {
-						topicWordPriors[topic][tok] = 0.1;
-					}
-				}
-
-				// LDA的Gibbs采样
-				OnlineLatentDirichletAllocation.GibbsSample gibbsSample = OnlineLatentDirichletAllocation
-						.gibbsSampler(docWords, topicNum, 0.1, topicWordPriors, 1000, 0, 0, new Random(1l), null);
-
-				List<Map<Integer, Double>> allTopicWordProbs = TimeSliceGenerator
-						.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
-				generateSlice.setTopicWordProb(allTopicWordProbs);
-				// 计算该时间片与上一时间片的对称kl散度距离
-				double[] distance = calDistanceBetweenTopics(timeSliceQueue.getLast(), generateSlice);
-				distanceMatrix.offer(distance);
-				timeSliceQueue.offer(generateSlice);
-				int hotTopicId = getTopicIndexByPercByLocal(distance);
-				if (hotTopicId != -1) {
-					System.out.println(hotTopicId);
-				}
-
-			} else if (timeSliceQueue.size() > NLPContants.QUEUE_MAX) {
-
-				// 根据线性时间片的衰减权值计算主题词的先验参数
-				double[][] topicWordPriors = calTopicWordPriors(timeSliceQueue, generateSlice);
-
-				// 江Document文档对象转化成LDA可训练的输入模式，词的索引为该时间片的局部索引
-				int[][] docWords = TimeSliceGenerator.transformDocuments(generateSlice);
-
-				// LDA的Gibbs采样
-				OnlineLatentDirichletAllocation.GibbsSample gibbsSample = OnlineLatentDirichletAllocation
-						.gibbsSampler(docWords, topicNum, 0.1, topicWordPriors, 1000, 0, 0, new Random(1l), null);
-
-				// 计算改时间片在全局映射下的各个主题的词分布
-				List<Map<Integer, Double>> allTopicWordProbs = TimeSliceGenerator
-						.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
-				generateSlice.setTopicWordProb(allTopicWordProbs);
-
-				// 计算该时间片与上一时间片的对称kl散度距离
-				double[] distance = calDistanceBetweenTopics(timeSliceQueue.getLast(), generateSlice);
-				distanceMatrix.offer(distance);
-				timeSliceQueue.offer(generateSlice);
-				distanceMatrix.poll();
-				timeSliceQueue.poll();
-				
-				int hotTopicId = getTopicIndexByPercByLocal(distance);
-				if (hotTopicId != -1) {
-					System.out.println(hotTopicId);
-				}
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+				Thread.currentThread().interrupt();
 			}
 		}
 	}
@@ -210,7 +222,11 @@ public class OnlineEventDetection extends Thread{
 	}
 
 	public static void main(String[] args) throws IOException {
-		
+		BlockingQueue<String> queue = new LinkedBlockingDeque<>(200);
+		NewsProducers produces = new NewsProducers(queue);
+		OnlineEventDetection onlineEd = new OnlineEventDetection(50, queue);
+		produces.start();
+		onlineEd.start();
 	}
 
 }
