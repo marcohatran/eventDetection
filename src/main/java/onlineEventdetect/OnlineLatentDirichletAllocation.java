@@ -532,7 +532,7 @@ public class OnlineLatentDirichletAllocation implements Serializable {
 		}
 		throw new IllegalStateException("unreachable in practice because of return if epoch==numEpochs");
 	}
-	
+
 	/**
 	 * Tokenize an array of text documents represented as character sequences into a
 	 * form usable by LDA, using the specified tokenizer factory and symbol table.
@@ -947,12 +947,15 @@ public class OnlineLatentDirichletAllocation implements Serializable {
 		 *             (inclusive) and the number of words (exclusive).
 		 */
 		public double topicWordProb(int topic, int word) {
-			double topicWordPrior = 0;
-			for (int tok = 0; tok < numWords(); tok++) {
-				topicWordPrior += topicWordPriors()[topic][tok];
-			}
-			return (topicWordCount(topic, word) + topicWordPriors()[topic][word])
-					/ (topicCount(topic) + numWords() * topicWordPrior);
+//			double topicWordPrior = 0;
+//			for (int tok = 0; tok < numWords(); tok++) {
+//				topicWordPrior += topicWordPriors()[topic][tok];
+//			}
+			// return (topicWordCount(topic, word) + topicWordPriors()[topic][word])
+			// / (topicCount(topic) + topicWordPrior);
+			double v1 = topicWordCount(topic, word);
+			double v2 = topicCount(topic);
+			return v1 / v2;
 		}
 
 		/**
@@ -1032,7 +1035,9 @@ public class OnlineLatentDirichletAllocation implements Serializable {
 					int word = word(doc, token);
 					double wordProb = 0.0;
 					for (int topic = 0; topic < numTopics; ++topic) {
-						double wordTopicProbGivenDoc = topicWordProb(topic, word) * documentTopicProb(doc, topic);
+						double p1 = topicWordProb(topic, word);
+						double p2 = documentTopicProb(doc, topic);
+						double wordTopicProbGivenDoc = p1 * p2;
 						wordProb += wordTopicProbGivenDoc;
 					}
 					corpusLog2Prob += Math.log2(wordProb);

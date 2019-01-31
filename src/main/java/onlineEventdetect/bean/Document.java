@@ -27,6 +27,9 @@ public class Document {
 		this.docuemntId = docuemntId;
 		for (String token : factory.tokenizer(content.toCharArray(), 0, content.length())) {
 			String[] splits = token.split("/");
+			if(splits[0].length() < 2) {
+				continue;
+			}
 			int symbol = sliceSymbolTable.getOrAddSymbol(splits[0]);
 			NLPContants.GLOBAL_WORD_INDEX.getOrAddSymbol(splits[0]);
 			tmpSymbolList.add(symbol);

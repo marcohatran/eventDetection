@@ -1,5 +1,6 @@
 package onlineEventdetect;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -10,6 +11,10 @@ import java.util.Random;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingDeque;
 
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang3.StringUtils;
+
+import com.aliasi.cluster.LatentDirichletAllocation;
 import com.aliasi.symbol.SymbolTable;
 import com.aliasi.util.ObjectToDoubleMap;
 
@@ -67,12 +72,15 @@ public class OnlineEventDetection extends Thread {
 					double[][] topicWordPriors = new double[topicNum][wordNum];
 					for (int topic = 0; topic < topicNum; topic++) {
 						for (int tok = 0; tok < wordNum; tok++) {
-							topicWordPriors[topic][tok] = 0.1;
+							topicWordPriors[topic][tok] = 0.01;
 						}
 					}
 					OnlineLatentDirichletAllocation.GibbsSample gibbsSample = OnlineLatentDirichletAllocation
 							.gibbsSampler(docWords, (short)topicNum, 0.1, topicWordPriors, 0, 1, 1000, new Random(1l), handler);
 					TimeSliceGenerator.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
+					List<Map<Integer, Double>> allTopicWordProbs = TimeSliceGenerator
+							.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
+					generateSlice.setTopicWordProb(allTopicWordProbs);
 					timeSliceQueue.offer(generateSlice);
 
 				} else if (timeSliceQueue.size() < NLPContants.QUEUE_MAX) {
@@ -93,16 +101,18 @@ public class OnlineEventDetection extends Thread {
 					List<Map<Integer, Double>> allTopicWordProbs = TimeSliceGenerator
 							.generateTopicWordProbInTimeSlice(gibbsSample, generateSlice);
 					generateSlice.setTopicWordProb(allTopicWordProbs);
+					
 					// 计算该时间片与上一时间片的对称kl散度距离
 					double[] distance = calDistanceBetweenTopics(timeSliceQueue.getLast(), generateSlice);
 					distanceMatrix.offer(distance);
 					timeSliceQueue.offer(generateSlice);
-					int hotTopicId = getTopicIndexByPercByLocal(distance);
-					if (hotTopicId != -1) {
-						System.out.println(hotTopicId);
-					}
+					FileUtils.write(new File("D://distance_event"), StringUtils.join(distance, '\t')+"\n","utf-8",true);
+//					int hotTopicId = getTopicIndexByPercByLocal(distance);
+//					if (hotTopicId != -1) {
+//						System.out.println(hotTopicId);
+//					}
 
-				} else if (timeSliceQueue.size() > NLPContants.QUEUE_MAX) {
+				} else if (timeSliceQueue.size() >= NLPContants.QUEUE_MAX) {
 
 					// 根据线性时间片的衰减权值计算主题词的先验参数
 					double[][] topicWordPriors = calTopicWordPriors(timeSliceQueue, generateSlice);
@@ -121,6 +131,7 @@ public class OnlineEventDetection extends Thread {
 
 					// 计算该时间片与上一时间片的对称kl散度距离
 					double[] distance = calDistanceBetweenTopics(timeSliceQueue.getLast(), generateSlice);
+					FileUtils.write(new File("D://distance_event"), StringUtils.join(distance, '\t')+"\n","utf-8",true);
 					distanceMatrix.offer(distance);
 					timeSliceQueue.offer(generateSlice);
 					distanceMatrix.poll();
@@ -131,7 +142,8 @@ public class OnlineEventDetection extends Thread {
 						System.out.println(hotTopicId);
 					}
 				}
-			} catch (InterruptedException e) {
+				System.out.println(String.format("Dic SIze = %d",NLPContants.GLOBAL_WORD_INDEX.numSymbols()));
+			} catch (InterruptedException | IOException e) {
 				e.printStackTrace();
 				Thread.currentThread().interrupt();
 			}
@@ -203,6 +215,7 @@ public class OnlineEventDetection extends Thread {
 				Map<Integer, Double> map = list.get(topic);
 				for (Entry<Integer, Double> entry : map.entrySet()) {
 					otd.increment(entry.getKey(), entry.getValue() * (sliceNum * 0.02 + startweight));
+					sliceNum++;
 				}
 			}
 			for (Integer index : otd.keySet()) {
